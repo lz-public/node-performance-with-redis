@@ -29,4 +29,10 @@ Go to the first terminal and take note about how it performs. Then press Ctr+C o
 Compare the differences.
 
 ### Part III - The Distributed Realtime Ranking Service
-TBD
+Open a terminal, go to the "node-redis" and run:
+* node part-3-ranking-redis-api-pubsub.js
+Open a new terminal, go to the "bots" folder and run:
+* node index.js 9990
+Open a new terminal, return to the "node-redis" folder and run:
+* node index.js 9991 (do the same with 9992, 9993 and so on)
+
