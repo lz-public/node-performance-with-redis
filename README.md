@@ -6,12 +6,12 @@ This code was presented in a Nodeconf's workshop to provide a simple example abo
 The parts I and II are focused on performance, and the part III, on scalability.  
 
 ### The problem
-Some time ago a customer asked us to build a ranking for a game they are running. Players would earn points and the player who got more points was at the top list of the ranking. The mission was nothing more simpler than building a service that receives a player id and responded with an updated ranking.
+Some time ago a customer asked us to build a ranking for a game they are running. Players would earn points and the player who got more points was at the top list of the ranking. The mission was nothing more simpler than building a service that received a player id and responded with an updated ranking.
 
 Our first solution based in Node.js and MongoDB had limitations. As the user list grew and more concurrent connections we had, we experienced a big delay in processing the ranking. To build the list for a single user would take up a couple of seconds. There were two problems: 1) by the time the ranking was ready to be sent to the players, new points already got in and the top position belonged to another player and, 2) If many users checked the ranking, the server and MongoDB would get stuck processing rankings.
 
 ### The experiment
-The first idea that came to our minds was to process everything in memory. However, that solution was not performant. What could be wrong? We figured out that Node.js is slow compared to other languages (or database engines!) when solving  *some kind of problems*, especially with large in-memory data sets. Here is an example. 
+The first idea that came to our minds was to process everything in memory. However, that solution was not performant either. What could be wrong? Some kind of in-memory operations in Node.js are really slow compared to similar operations executed in other languages (or database engines!), especially with large in-memory data sets. Here is an example. 
 
 ### Part I - Simple Ranking Engine
 First, in the Node.js solution we are going to work with an array of objects. Every time a player (or user) gets one point, we look for it in the array and increment the counter. If we can't find the user, then we'll add it to the end of the array. Second, we sort the array by points earned. This might not be the most performant solution because the sort function is not aware (at least we don't know it) that there's only one element to sort and might do some unnecessary extra processing to place the item in its correct position. However, for this purpose let's make the assumption that V8 uses the best execution path.
