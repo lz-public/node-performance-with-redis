@@ -3,7 +3,7 @@
   "version": "0.0.1",
   "author": "luciano@iamat.com",
   "dependencies": {
-    "config": "^1.15.0",
+    "config": "^1.31.0",
     "js-yaml": "^3.13.1",
     "request": "^2.53.0"
   },
