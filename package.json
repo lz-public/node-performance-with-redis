@@ -1,0 +1,11 @@
+{
+  "name": "node-performance-with-redis",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=24" },
+  "workspaces": ["node-redis", "bots"],
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "bench": "node node-redis/benchmark.js"
+  }
+}

@@ -1,52 +1,109 @@
-# Improving Node's performance with Redis
-## Workshop - NodeConf Argentina 2017
+# How many votes per second can a live leaderboard handle?
 
-This code was presented in a Nodeconf's workshop to provide a simple example of how some large arrays in some contexts are better handled by an external storage engine such as Redis than by Node.js working in-memory. Yes, Node.js is not as fast as one could think when working with large arrays.
+At NodeConf Argentina in 2017, Luciano Zappa presented a problem from a game: any vote could change the leader, and players wanted to see the top ten immediately. As the player count grew, calculating the standings on demand could take seconds. The workshop compares two ways to serve the same leaderboard: sort an array in Node.js after every vote, or let Redis maintain the order as scores change.
 
-The parts I and II are focused on performance, and the part III, on scalability.  
+Reviewed in **November 2026** with Node.js 26.13.1 and Redis 7 in Docker. The benchmarks also cover Node.js 24.20.0.
 
-### The problem
-Some time ago a customer asked us to build a ranking for a game they are running. Players would earn points and the player who got more points was on the top list of the ranking. The mission was nothing simpler than building a service that received a player id and responded with an updated ranking.
+## Run the workshop
 
-Our first solution based in Node.js and MongoDB had limitations. As the user list grew and more concurrent connections we had, we experienced a big delay in processing the ranking. To build the list for a single user would take up a couple of seconds. There were two problems: 1) by the time the ranking was ready to be sent to the players, new points already got in and the top position belonged to another player and, 2) If many users checked the ranking, the server and MongoDB would get stuck processing rankings.
+From the repository root on Linux, with nvm, Docker and Docker Compose installed, run:
 
-### The experiment
-The first idea that came to our minds was to process everything in memory. However, that solution was not performant either. What could be wrong? Some kind of in-memory operations in Node.js are really slow compared to similar operations executed in other languages (or database engines!), especially with large in-memory datasets. Here is an example. 
+```sh
+nvm install
+nvm use
+npm ci
+docker compose up -d --wait redis
+npm test
+npm audit
+```
 
-### Part I - Simple Ranking Engine
-First, in the Node.js solution, we are going to work with an array of objects. Every time a player (or user) gets one point, we look for it in the array and increment the counter. If we can't find the user, then we'll add it to the end of the array. Second, we sort the array by points earned. This might not be the most performant solution because the sort function is not aware (at least we don't know it) that there's only one element to sort and might do some unnecessary extra processing to place the item in its correct position. However, for this purpose let's make the assumption that V8 uses the best execution path.
+Compose starts `redis:7-alpine` on `127.0.0.1:6379` and waits for Redis to answer `PING`. RDB snapshots and append-only persistence are disabled, and the eviction policy is `noeviction`. Node runs on the host. If Docker requires elevated permissions in your session, use `sudo` for the Compose commands. When you finish the workshop, `docker compose down -v` removes the container and its volumes.
 
-Then, we've built another solution based on Redis delegates all the management of the user list and their points earned to the Redis engine.
+### I. Update the leaderboard without HTTP
 
-Open a terminal, go to the "node-redis" folder and run "npm install". Then, run:
-* `node part-1-ranking-node.js`
-Take note about how it performs. Then press Ctrl + C and run:
-* `node part-1-ranking-redis.js`
-Compare the differences.
+```sh
+node node-redis/part-1-ranking-node.js
+node node-redis/part-1-ranking-redis.js
+```
 
-### Part II - The Realtime Ranking Service
-Now we've build a server that can be accessed from a browser window. Each time we load the page, it will add a point to the user id we enter as paramenter. For a better understanding about how it works, we included a Bot that emulates a competition with many players.
+Both programs cast the same sequence of 50,000 votes across 10,000 possible players, one vote at a time. Each vote adds a point and returns the current top ten. Compare the elapsed times and final standings in the terminal. The Redis example uses its own temporary key. To change the number of players or votes, edit [config.json](node-redis/config.json).
 
-Open a terminal and run:
-* `node part-2-ranking-node-api.js`
-Open a new terminal, go to the "bots" folder and run `npm install`. Then, run:
-* `node index.js 8080`
-Go to the first terminal and take note about how it performs. Then press Ctr+C on both terminals and run:
-* `node part-2-ranking-redis-api.js` (in terminal #1)
-* `node index.js 9090` (in terminal #2)
-Compare the differences.
+### II. Serve the leaderboard over HTTP
 
-### Part III - The Distributed Realtime Ranking Service
-The last part of our workshop is not focused on performance. It's intended to show you how you can use the publisher/subscriber functions to create a server cluster and enhance your solutions with distributed processing.
+```sh
+node node-redis/part-2-ranking-node-api.js
+# In a second terminal
+node bots/index.js 8080
+```
 
-Try starting new server instances and, reading the source code, look how messaging is used by each instance to communicate with each other.  
+To try Redis, start `node node-redis/part-2-ranking-redis-api.js` and run the bot against port `9090`. To cast a single vote for player 42, run `curl http://127.0.0.1:9090/42`. On an empty leaderboard, the first vote returns:
 
-Open a terminal, go to the "node-redis" folder and run:
-* `node part-3-ranking-redis-api-pubsub.js`
-Open a new terminal, go to the "bots" folder and run:
-* `node index.js 9990`
-Open a new terminal, return to the "node-redis" folder and run:
-* `node index.js 9991` (do the same with 9992, 9993 and so on)
+```json
+[{"position":0,"userId":"42","points":1}]
+```
 
-If you shut down the server at port 9990, the clients will start requesting to the other servers and the active pool of instances won't suggest the clients connect to the terminated instance. Play turning instances on and off. The bots stop if they encounter more errors than specified in `maxErrors`. 
+Each `GET /:id` with a decimal player ID adds one point. Positions start at zero. Ties are broken by player ID in descending string order, so `"9"` comes before `"10"`. The Redis API keeps scores across Node restarts under the key `workshop:redis`. Set `RANKING_KEY` to use a different key.
 
+### III. Share a leaderboard across two servers
+
+Open three terminals in the repository root and run one command in each.
+
+```sh
+node node-redis/part-3-ranking-redis-api-pubsub.js 9990
+node node-redis/part-3-ranking-redis-api-pubsub.js 9991
+node bots/index.js 9990 1 SLOW
+```
+
+Using one player makes it easy to watch votes alternate. If the player votes twice in a row on the same server while a peer is available, the server replies with a message such as `{"status":"rejected","availableHosts":[9991]}`. The bot retries that vote on the suggested port. Once the bot has discovered both servers, stop one with Ctrl+C to see the other continue accepting votes.
+
+Both servers store accepted votes in the sorted set `workshop:distributed`. They use Redis Pub/Sub to announce arrivals, departures and votes, with a dedicated connection for each subscriber. Heartbeats let peers detect an abrupt shutdown. A missed message can temporarily leave a server with stale information about which players should vote elsewhere. The benchmark below measures the HTTP service in part II.
+
+## Why the player count matters
+
+The array implementation calls `find` to locate the player, updates the score, then calls `sort` before copying the first ten entries. V8 can take advantage of the existing order, but scanning the array still takes time on the same thread that handles incoming requests. This experiment measures that particular algorithm. Comparing other JavaScript indexes or isolating the cost of memory allocation and garbage collection would require separate experiments. [The Node.js event loop](https://nodejs.org/en/learn/asynchronous-work/dont-block-the-event-loop)
+
+Redis keeps a sorted set ordered between votes. For a large set, it uses a hash table to find a player and a skip list to update the player's position. With this representation, `ZINCRBY` takes O(log N), and reading the top ten with `ZRANGE ... REV WITHSCORES` takes O(log N + 10). Small sets can use a compact *listpack*, depending on the configured thresholds. The server sends the increment and read in a single `MULTI/EXEC` transaction so the response reflects that vote before another can intervene. Node can handle other requests while it waits for Redis. The round trip matters most when the leaderboard is small enough to scan quickly. [Redis sorted sets](https://redis.io/docs/latest/develop/data-types/sorted-sets/) · [ZINCRBY](https://redis.io/docs/latest/commands/zincrby/) · [ZRANGE](https://redis.io/docs/latest/commands/zrange/)
+
+## Benchmark results
+
+With Node 26 and 16 concurrent requests, the array had a small lead at 100 players. At 10,000 players, Redis handled about **4 times as many votes per second**. At 50,000 players, it handled **11.4 times as many**. Node 24 showed the same pattern. The 2017 workshop has no comparable measurements to establish how far the crossover has shifted since then.
+
+**Concurrent requests** is the maximum number of HTTP requests the client can have outstanding at once. Each completed request adds one vote and returns the top ten. Throughput is the median of three runs on an AMD Ryzen 7 255 running Linux x86-64, with Redis 7.4.12 in Docker over loopback and the `redis` npm client at 6.4.0.
+
+| Node.js | Players | Concurrent requests | Array (votes/s) | Redis (votes/s) |
+|---|---:|---:|---:|---:|
+| 26.13.1 | 100 | 1 | 3,842 | 2,294 |
+| 26.13.1 | 100 | 16 | 7,070 | 6,786 |
+| 26.13.1 | 100 | 64 | 7,298 | 6,776 |
+| 26.13.1 | 10,000 | 1 | 1,527 | 2,180 |
+| 26.13.1 | 10,000 | 16 | 2,564 | 10,343 |
+| 26.13.1 | 10,000 | 64 | 2,820 | 7,100 |
+| 26.13.1 | 50,000 | 1 | 597 | 2,378 |
+| 26.13.1 | 50,000 | 16 | 654 | 7,470 |
+| 26.13.1 | 50,000 | 64 | 785 | 8,222 |
+| 24.20.0 | 100 | 1 | 629 | 543 |
+| 24.20.0 | 100 | 16 | 7,653 | 5,943 |
+| 24.20.0 | 10,000 | 1 | 505 | 568 |
+| 24.20.0 | 10,000 | 16 | 2,689 | 6,705 |
+| 24.20.0 | 50,000 | 1 | 326 | 564 |
+| 24.20.0 | 50,000 | 16 | 734 | 6,989 |
+
+All 90 runs completed, with 90,000 measured votes and zero HTTP errors. The raw results include one record per run. [Node 26 results](benchmarks/node26.jsonl) · [Node 24 results](benchmarks/node24.jsonl)
+
+## Reproduce the benchmark
+
+```sh
+nvm use
+CONCURRENCY=1,16,64 npm run --silent bench > node26.jsonl
+nvm exec --silent 24 node node-redis/benchmark.js > node24.jsonl
+```
+
+The HTTP client and server run in separate processes on the same machine. Each run starts a fresh server with every player's score set to zero. After 250 warm-up votes, the client sends 1,000 measured votes using the seed 2017. Each worker waits for the complete response before sending its next vote. The benchmark reverses the order of the two implementations on the second of three runs. Concurrent requests may arrive in a different order, and the Redis client may automatically batch commands. At the end of each Redis run, the benchmark deletes its temporary key.
+
+Set `SIZES` and `CONCURRENCY` to comma-separated lists of player counts and concurrency levels. Set `REQUESTS` for the number of measured votes per run and `REPEATS` for the number of repetitions. Each run writes one JSON record and fails if a request or server shutdown fails.
+
+## Contributors to the November 2026 review
+
+- **Claude** designed the Redis Compose configuration in the earlier session. For this revision, **Opus 5.5** with high reasoning effort proposed the ranking transaction, server instrumentation and benchmark design.
+- **Gemini** proposed tests for ties at tenth place, concurrent votes, matching results across implementations and coordination between servers. The integration tests require a running Redis instance.
+- **Codex GPT-6.2 Astra**, using low reasoning effort, designed the comparison and reviewed the interpretation of the results. **Codex**, acting as coordinator, adapted the code to the original API, implemented the bots with native `fetch`, preserved the three workshop entry points and ran the tests, npm audit and benchmarks. Claude and Gemini participated through the local agent bridge. Astra participated as a text-only subagent because the bridge requires distinct sender and receiver identities.

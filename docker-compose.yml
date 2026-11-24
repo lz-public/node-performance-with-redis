@@ -1,0 +1,54 @@
+x-redis-common: &redis-common
+  image: redis:7-alpine
+  restart: "no"
+  healthcheck:
+    test: ["CMD-SHELL", "redis-cli -p $${REDIS_PORT:-6379} ping | grep -q PONG"]
+    interval: 2s
+    timeout: 3s
+    retries: 15
+    start_period: 2s
+
+services:
+  redis:
+    <<: *redis-common
+    container_name: perf-redis
+    ports:
+      - "127.0.0.1:6379:6379"
+    command:
+      - redis-server
+      - --port
+      - "6379"
+      - --save
+      - ""                      # Disable RDB snapshots
+      - --appendonly
+      - "no"                    # Disable append-only persistence
+      - --protected-mode
+      - "no"                    # Connections arrive from the Docker bridge
+      - --maxmemory-policy
+      - noeviction              # Keep ranking entries in memory
+      - --client-output-buffer-limit
+      - pubsub 0 0 0            # Disable the Pub/Sub output buffer limit during benchmarks
+
+  # Optional second Redis instance for multi-instance tests (port 6380)
+  redis-2:
+    <<: *redis-common
+    container_name: perf-redis-2
+    profiles: ["multi"]
+    environment:
+      REDIS_PORT: "6380"
+    ports:
+      - "127.0.0.1:6380:6380"
+    command:
+      - redis-server
+      - --port
+      - "6380"
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+      - --protected-mode
+      - "no"
+      - --maxmemory-policy
+      - noeviction
+      - --client-output-buffer-limit
+      - pubsub 0 0 0
